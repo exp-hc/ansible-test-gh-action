@@ -159,6 +159,7 @@ runs:
   - name: Install ansible-core (${{ inputs.ansible-core-version }})
     run: >-
       set -x
+      ;
       mkdir -pv
       "${{ steps.collection-metadata.outputs.collection-namespace-path }}"
       ;
