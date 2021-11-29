@@ -229,7 +229,7 @@ runs:
     run: >-
       set -x
       ;
-      venv/bin/ansible-test ${{ inputs.testing-type }}
+      ${GITHUB_ACTION_PATH}/venv/bin/ansible-test ${{ inputs.testing-type }}
       -v --color
       --docker ${{ inputs.docker-image }}
       --coverage
