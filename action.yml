@@ -14,30 +14,31 @@ inputs:
       ideas.
     default: stable-2.11
     required: true
+  python-version:
+    description: Python version for initial venv
+    default: "3.8"
+    required: false
   docker-image:
     description: Docker image used by ansible-test
-    default:
+    required: false
   git-checkout-ref:
     description: Committish to check out
-    default:
+    required: false
   pre-test-cmd:
     description: Extra command to invoke before ansible-test
-    default:
-  python-version:
-    description: Controller Python version
-    default: 3.9
+    required: false
   target:
     description: ansible-test TARGET
-    default:
+    required: false
   target-python-version:
     description: Target Python version
-    default:
+    required: false
   testing-type:
     description: One of 'sanity', 'units' or 'integration'
     required: true
   test-deps:
     description: Test dependencies to install along with this collection
-    default:
+    required: false
 outputs:
   ansible-playbook-executable:
     description: Path to the auto-installed `ansible-playbook` executable
@@ -64,31 +65,30 @@ runs:
   steps:
   - name: Open an expandable block of code
     run: >-
-      echo ::group::Setting controller Python
-      to ${{ inputs.python-version }}...
+      echo ::group::Configure venv
     shell: bash
-  - name: Set controller Python to ${{ inputs.python-version }}
-    uses: actions/setup-python@v2
-    with:
-      python-version: ${{ inputs.python-version }}
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
-
-  - name: Open an expandable block of code
-    run: >-
-      echo ::group::Install Python YAML library
-    shell: bash
-  - name: Install PyYAML
+  - name: Configure venv
     run: >-
       set -x
       ;
-      python -m
+      rm -rf
+      ansible_collections
+      venv
+      ;
+      virtualenv
+      venv --python=python${{ inputs.python-version }}
+      ;
+      source
+      venv/bin/activate
+      ;
+      pip install --upgrade pip
+      ;
       pip install
-      'PyYAML>5,<6'
+      https://github.com/ansible/ansible/archive/${{
+        inputs.ansible-core-version
+      }}.tar.gz
+      --no-cache-dir
       --disable-pip-version-check
-      --user
       ;
       set +x
     shell: bash
@@ -159,36 +159,12 @@ runs:
   - name: Install ansible-core (${{ inputs.ansible-core-version }})
     run: >-
       set -x
-      ;
       mkdir -pv
       "${{ steps.collection-metadata.outputs.collection-namespace-path }}"
       ;
       mv -v
       ".tmp-ansible-collection-checkout"
       "${{ steps.collection-metadata.outputs.checkout-path }}"
-      ;
-      set +x
-    shell: bash
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
-
-  - name: Open an expandable block of code
-    run: >-
-      echo ::group::Installing ansible-core
-      version ${{ inputs.ansible-core-version }}...
-    shell: bash
-  - name: Install ansible-core (${{ inputs.ansible-core-version }})
-    run: >-
-      set -x
-      ;
-      python -m pip install
-      https://github.com/ansible/ansible/archive/${{
-        inputs.ansible-core-version
-      }}.tar.gz
-      --disable-pip-version-check
-      --user
       ;
       set +x
     shell: bash
@@ -207,7 +183,7 @@ runs:
     run: >-
       ${{
           inputs.test-deps
-          && format('set -x; ~/.local/bin/ansible-galaxy collection install {0} -p .; set +x', inputs.test-deps)
+          && format('set -x; venv/bin/ansible-galaxy collection install {0} -p .; set +x', inputs.test-deps)
           || '>&2 echo Skipping installing the dependencies...'
       }}
     shell: bash
@@ -252,7 +228,7 @@ runs:
     run: >-
       set -x
       ;
-      ~/.local/bin/ansible-test ${{ inputs.testing-type }}
+      venv/bin/ansible-test ${{ inputs.testing-type }}
       -v --color
       --docker ${{ inputs.docker-image }}
       --coverage
@@ -271,43 +247,6 @@ runs:
       set +x
     shell: bash
     working-directory: ${{ steps.collection-metadata.outputs.checkout-path }}
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
-
-  - name: Open an expandable block of code
-    run: >-
-      echo ::group::Generating a coverage report...
-    shell: bash
-  - name: Generate coverage report
-    run: >-
-      set -x
-      ;
-      ~/.local/bin/ansible-test coverage xml
-      -v --requirements
-      --group-by command
-      --group-by version
-      ;
-      set +x
-    shell: bash
-    working-directory: ${{ steps.collection-metadata.outputs.checkout-path }}
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
-
-  - name: Open an expandable block of code
-    run: >-
-      echo ::group::Sending the coverage data over to
-      https://codecov.io/gh/${{ github.repository }}...
-    shell: bash
-  - name: >-
-      Send the coverage data over to
-      https://codecov.io/gh/${{ github.repository }}
-    uses: codecov/codecov-action@v2
-    with:
-      flags: ${{ inputs.testing-type }}
   - name: Close an expandable block of code
     run: >-
       echo ::endgroup::
