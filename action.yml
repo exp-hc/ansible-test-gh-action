@@ -77,7 +77,7 @@ runs:
       mkdir -pv
       /opt/venvs/
       ;
-      python -m pip
+      python3 -m pip
       /opt/venvs/${{ inputs.ansible-core-version }}
       ;
       source
