@@ -233,7 +233,18 @@ runs:
     run: >-
       set -x
       ;
-      python -m
+      rm -rf
+      ansible_collections
+      venv
+      ;
+      virtualenv
+      venv --python=python${{ inputs.python-version }}
+      ;
+      source
+      venv/bin/activate
+      ;
+      pip install --upgrade pip
+      ;
       pip install
       PyYAML
       --disable-pip-version-check
@@ -526,7 +537,6 @@ runs:
       ${{ fromJSON(steps.collection-metadata.outputs.copy-to-checkout-path) }}
     run: >-
       set -x
-      ;
       mkdir -pv
       "${{ steps.collection-metadata.outputs.collection-namespace-path }}"
       ;
