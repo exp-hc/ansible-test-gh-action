@@ -145,7 +145,7 @@ runs:
           '::set-output name=checkout-path::ansible_collections/{ns}/{name}'.
           format(name=coll_name, ns=coll_ns)
       )
-    shell: python
+    shell: /opt/venvs/${{ inputs.ansible-core-version }}/bin/python
     working-directory: .tmp-ansible-collection-checkout
   - name: Close an expandable block of code
     run: >-
