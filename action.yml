@@ -100,26 +100,6 @@ runs:
 
   - name: Open an expandable block of code
     run: >-
-      echo ::group::Install Python YAML library
-    shell: bash
-  - name: Install PyYAML
-    run: >-
-      set -x
-      ;
-      python -m
-      pip install
-      'PyYAML>5,<6'
-      --disable-pip-version-check
-      ;
-      set +x
-    shell: bash
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
-
-  - name: Open an expandable block of code
-    run: >-
       echo ::group::Checking out the repository into a temporary location...
     shell: bash
   - name: Check out the collection
@@ -252,7 +232,7 @@ runs:
     run: >-
       set -x
       ;
-      ~/.local/bin/ansible-test ${{ inputs.testing-type }}
+      /opt/venvs/${{ inputs.ansible-core-version }}/bin/ansible-test ${{ inputs.testing-type }}
       -v --color
       --docker ${{ inputs.docker-image }}
       --coverage
