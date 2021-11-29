@@ -537,6 +537,7 @@ runs:
       ${{ fromJSON(steps.collection-metadata.outputs.copy-to-checkout-path) }}
     run: >-
       set -x
+      ;
       mkdir -pv
       "${{ steps.collection-metadata.outputs.collection-namespace-path }}"
       ;
