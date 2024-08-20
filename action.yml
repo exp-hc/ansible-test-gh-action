@@ -11,34 +11,101 @@ inputs:
     description: >-
       `ansible-core` Git revision. See https://github.com/ansible/ansible/tags
       and https://github.com/ansible/ansible/branches/all?query=stable- for
-      ideas.
-    default: stable-2.11
+      ideas. The repository this refers to can be changed with the
+      `ansible-core-github-repository-slug` option.
+    default: stable-2.14
     required: true
-  python-version:
-    description: Python version for initial venv
-    default: "3.8"
-    required: false
+  ansible-core-github-repository-slug:
+    description: The GitHub repository slug from which to check out ansible-core
+    default: ansible/ansible
+  codecov-token:
+    description: >-
+      The Codecov token to use when uploading coverage data.
+  controller-python-version:
+    description: >-
+      Controller Python version. Only used for integration tests and
+      ansible-core 2.12 or later when `target-python-version` is also
+      specified.
+    default: auto
+  collection-root:
+    description: Collection root relative to repository root
+    default: .
+  collection-src-directory:
+    description: >-
+      A pre-checked out collection directory that's already on disk,
+      substitutes getting the source from the remote Git repository if
+      set. This action will not attempt to mutate its contents
+  coverage:
+    description: >-
+      Whether to collect and upload coverage information. Can be set to
+      `always`, `never`, and `auto`. The value `auto` will upload coverage
+      information except when `pull-request-change-detection` is set to `true`
+      and the action is called from a Pull Request.
+    default: auto
   docker-image:
     description: Docker image used by ansible-test
-    required: false
   git-checkout-ref:
-    description: Committish to check out
-    required: false
+    description: >-
+      Committish to check out, unused
+      if `collection-src-directory` is set
+  integration-continue-on-error:
+    description: >-
+      Whether the continue with the other integration tests when an error
+      occurs. If set to `false`, will stop on the first error. When set to
+      `false` and `coverage=auto`, code coverage uploading will be disabled.
+    default: 'true'
+  integration-diff:
+    description: >-
+      Whether to show diff output when calling actions in integration tests.
+      Actions can override this by specifying `diff: false` or `diff: true`.
+    default: 'true'
+  integration-retry-on-error:
+    description: >-
+      Whether to retry the current integration test once when an error happens.
+    default: 'true'
+  origin-python-version:
+    description: >-
+      Environment Python version. The value `auto` uses the maximum Python
+      version supported by the given `ansible-core-version`.
+    default: auto
   pre-test-cmd:
     description: Extra command to invoke before ansible-test
-    required: false
+  pull-request-change-detection:
+    description: >-
+      Whether to use change detection for pull requests. If set to `true`, will
+      use change detection to determine changed files against the target
+      branch, and will not upload code coverage results. If the invocation is
+      not from a pull request, this option is ignored. Note that this requires
+      `collection-src-directory` to be empty, or it has to be a git repository
+      checkout where `collection-src-directory`/`collection-root` ends with
+      `ansible_collections/{namespace}/{name}`, or it has to be a git
+      repository checkout where `collection-root` is `.`.
+    default: 'false'
+  python-version:
+    description: >-
+      **(DEPRECATED)** Use `origin-python-version` instead. This is only kept
+      for backwards compatibility.
+    deprecationMessage: >-
+      Replace `python-version` with `origin-python-version`.
+      It is scheduled to be removed in version 3 of this action.
+  sanity-tests:
+    description: >-
+      Comma-separated list of sanity tests to run.
+      If not present, all applicable tests are run.
+  sanity-skip-tests:
+    description: Comma-separated list of sanity tests to skip.
+  sanity-allow-disabled:
+    description: Allow sanity tests to run which are disabled by default.
+    default: 'false'
   target:
     description: ansible-test TARGET
-    required: false
   target-python-version:
     description: Target Python version
-    required: false
   testing-type:
     description: One of 'sanity', 'units' or 'integration'
     required: true
   test-deps:
     description: Test dependencies to install along with this collection
-    required: false
 outputs:
   ansible-playbook-executable:
     description: Path to the auto-installed `ansible-playbook` executable
@@ -55,19 +122,114 @@ outputs:
     description: Detected collection FQCN
     value: ${{ steps.collection-metadata.outputs.fqcn }}
   collection-name:
-    description: Detected collection FQCN
+    description: Detected collection name
     value: ${{ steps.collection-metadata.outputs.name }}
   collection-namespace:
-    description: Detected collection FQCN
+    description: Detected collection namespace
     value: ${{ steps.collection-metadata.outputs.namespace }}
+  origin-python-path:
+    description: >-
+      The [`python-path` output
+      value](https://github.com/actions/setup-python/blob/main/docs/advanced-usage.md#python-path)
+      of the [setup-python](https://github.com/actions/setup-python/#readme)
+      action.
+    value: ${{ steps.setup-python.outputs.python-path }}
+  origin-python-version:
+    description: >-
+      The actual value of `origin-python-version` passed to the
+      [setup-python](https://github.com/actions/setup-python/#readme) action.
+    value: >-
+      ${{ steps.compute-origin-python-version.outputs.origin-python-version }}
 runs:
   using: composite
   steps:
-  - name: Open an expandable block of code
-    run: >-
-      echo ::group::Configure venv
+  - name: Log the next step action
+    run: echo ▷ Figuring out the environment Python version...
     shell: bash
-  - name: Configure venv
+  - name: Compute job Python version
+    id: compute-origin-python-version
+    run: |
+      # Compute job Python version
+      import os
+      import pathlib
+      import sys
+
+      FILE_APPEND_MODE = 'a'
+      OUTPUTS_FILE_PATH = pathlib.Path(os.environ['GITHUB_OUTPUT'])
+
+      def set_output(name, value):
+          with OUTPUTS_FILE_PATH.open(FILE_APPEND_MODE) as outputs_file:
+              outputs_file.writelines(f'{name}={value}{os.linesep}')
+
+      # Input from GHA
+      origin_python_version = '${{ inputs.origin-python-version }}'
+      old_python_version = '${{ inputs.python-version }}'
+      ansible_core_version = '${{ inputs.ansible-core-version }}'
+
+      # Handle case that deprecated Python version parameter is provided
+      if old_python_version:
+          # Check whether the default of origin-python-version was changed
+          if origin_python_version != 'auto':
+              print(
+                  '::error ::`python-version` and `origin-python-version` '
+                  'cannot both be supplied. Use only `origin-python-version` '
+                  'and not its deprecated alias `python-version`.'
+              )
+              sys.exit(1)
+
+          origin_python_version = old_python_version
+
+      if origin_python_version == 'auto':
+          # Determine the maximum Python version supported by the
+          # given ansible-core version.
+          python_version_map = {
+              'stable-2.9': (3, 8),
+              'stable-2.10': (3, 9),
+              'stable-2.11': (3, 9),
+              'stable-2.12': (3, 10),
+              'stable-2.13': (3, 10),
+              'stable-2.14': (3, 11),
+              'stable-2.15': (3, 11),
+          }
+          python_version_fallback_for_devel = max(
+              set(python_version_map.values()),
+          )
+          origin_python_version_tuple = python_version_map.get(
+              ansible_core_version,
+              # For any non-stable branch, we assume
+              # the latest version supported by 'devel':
+              python_version_fallback_for_devel,
+          )
+          origin_python_version = '.'.join(
+              map(str, origin_python_version_tuple),
+          )
+
+      # Set computed origin-python-version
+      set_output('origin-python-version', origin_python_version)
+    shell: python
+  - name: Log the next step action
+    run: >-
+      echo ▷ Setting job Python to
+      ${{
+        steps.compute-origin-python-version.outputs.origin-python-version
+      }}...
+    shell: bash
+  - name: >-
+      Set controller Python to
+      ${{ steps.compute-origin-python-version.outputs.origin-python-version }}
+    id: setup-python
+    uses: actions/setup-python@v5
+    with:
+      python-version: >-
+        ${{
+          steps.compute-origin-python-version.outputs.origin-python-version
+        }}
+
+  - name: Log the next step action
+    run: >-
+      echo ▷ Install Python YAML library
+    shell: bash
+  - name: Install PyYAML
     run: >-
       set -x
       ;
@@ -84,118 +246,363 @@ runs:
       pip install --upgrade pip
       ;
       pip install
-      https://github.com/ansible/ansible/archive/${{
-        inputs.ansible-core-version
-      }}.tar.gz
-      --no-cache-dir
+      PyYAML
       --disable-pip-version-check
+      --prefer-binary
+      --user
       ;
       set +x
     shell: bash
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
 
-  - name: Open an expandable block of code
+  - name: Log the next step action
     run: >-
-      echo ::group::Checking out the repository into a temporary location...
+      echo ▷ Compose the ansible-test command line
+    shell: bash
+  - name: Compose the ansible-test command line
+    id: ansible-test-command
+    env:
+      GHA_ANSIBLE_CORE_VERSION: ${{ inputs.ansible-core-version }}
+      GHA_CONTAINER_NETWORK: ${{ job.container.network }}
+      GHA_CONTROLLER_PYTHON_VERSION: ${{ inputs.controller-python-version }}
+      GHA_COVERAGE: ${{ inputs.coverage }}
+      GHA_DOCKER_IMAGE: ${{ inputs.docker-image }}
+      GHA_INTEGRATION_CONTINUE_ON_ERROR: >-
+        ${{ inputs.integration-continue-on-error }}
+      GHA_INTEGRATION_DIFF: ${{ inputs.integration-diff }}
+      GHA_INTEGRATION_RETRY_ON_ERROR: ${{ inputs.integration-retry-on-error }}
+      GHA_PULL_REQUEST_BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+      GHA_PULL_REQUEST_CHANGE_DETECTION: >-
+        ${{ inputs.pull-request-change-detection }}
+      GHA_SANITY_TESTS: ${{ inputs.sanity-tests }}
+      GHA_SANITY_SKIP_TESTS: ${{ inputs.sanity-skip-tests }}
+      GHA_SANITY_ALLOW_DISABLED: ${{ inputs.sanity-allow-disabled }}
+      GHA_TARGET: ${{ inputs.target }}
+      GHA_TARGET_PYTHON_VERSION: ${{ inputs.target-python-version }}
+      GHA_TESTING_TYPE: ${{ inputs.testing-type }}
+    run: |
+      import json
+      import os
+      import pathlib
+      import shlex
+      import sys
+
+      FILE_APPEND_MODE = 'a'
+      OUTPUTS_FILE_PATH = pathlib.Path(os.environ['GITHUB_OUTPUT'])
+
+      def set_output(name, value):
+          with OUTPUTS_FILE_PATH.open(FILE_APPEND_MODE) as outputs_file:
+              outputs_file.writelines(f'{name}={value}{os.linesep}')
+
+      # Input from GHA
+      gha_ansible_core_version = os.environ['GHA_ANSIBLE_CORE_VERSION']
+      gha_container_network = os.environ['GHA_CONTAINER_NETWORK']
+      gha_controller_python_version = (
+          os.environ['GHA_CONTROLLER_PYTHON_VERSION']
+      )
+      gha_coverage = os.environ['GHA_COVERAGE']
+      gha_docker_image = os.environ['GHA_DOCKER_IMAGE']
+      gha_integration_continue_on_error = json.loads(
+          os.environ['GHA_INTEGRATION_CONTINUE_ON_ERROR']
+      )
+      gha_integration_diff = json.loads(
+          os.environ['GHA_INTEGRATION_DIFF']
+      )
+      gha_integration_retry_on_error = json.loads(
+          os.environ['GHA_INTEGRATION_RETRY_ON_ERROR']
+      )
+      gha_pull_request_branch = os.environ['GHA_PULL_REQUEST_BASE_REF']
+      gha_pull_request_change_detection = json.loads(
+          os.environ['GHA_PULL_REQUEST_CHANGE_DETECTION']
+      )
+      gha_sanity_tests = os.environ['GHA_SANITY_TESTS']
+      gha_sanity_skip_tests = os.environ['GHA_SANITY_SKIP_TESTS']
+      gha_sanity_allow_disabled = json.loads(
+          os.environ['GHA_SANITY_ALLOW_DISABLED']
+      ) is True
+      gha_target = os.environ['GHA_TARGET']
+      gha_target_python_version = os.environ['GHA_TARGET_PYTHON_VERSION']
+      gha_testing_type = os.environ['GHA_TESTING_TYPE']
+
+      # Validate GHA inputs
+      if gha_coverage not in {'always', 'never', 'auto'}:
+          print(
+              '::error ::`coverage` must have one of the values `always`,'
+              f' `never`, or `auto`.  The current value is `{gha_coverage}`.'
+          )
+          sys.exit(1)
+
+      # Compose ansible-test arguments
+      command = [gha_testing_type, '-v', '--color']
+
+      # Compute coverage and change detection arguments
+      has_change_detection = (
+          gha_pull_request_branch and gha_pull_request_change_detection
+      )
+      if has_change_detection:
+          if gha_coverage == 'auto':
+              print(
+                  'Disabling coverage reporting due to pull request '
+                  'change detection being enabled.',
+              )
+              gha_coverage = 'never'
+          command.extend([
+              '--changed',
+              '--base-branch',
+              gha_pull_request_branch,
+          ])
+      has_coverage = gha_coverage != 'never'
+      if has_coverage:
+          command.append('--coverage')
+
+      if gha_testing_type == 'sanity':
+          command.append('--junit')
+
+          if gha_sanity_tests:
+              for test in gha_sanity_tests.split(','):
+                  command.extend([
+                      '--test',
+                      test.strip(),
+                  ])
+          if gha_sanity_skip_tests:
+              for test in gha_sanity_skip_tests.split(','):
+                  command.extend([
+                      '--skip-test',
+                      test.strip(),
+                  ])
+          if gha_sanity_allow_disabled:
+              command.append('--allow-disabled')
+
+      if gha_testing_type == 'integration':
+          if gha_integration_retry_on_error:
+              command.append('--retry-on-error')
+          if gha_integration_continue_on_error:
+              command.append('--continue-on-error')
+          if gha_integration_diff:
+              command.append('--diff')
+          if gha_container_network != '':
+              command.append(f"--docker-network={gha_container_network}")
+
+      if (
+          gha_testing_type == 'integration'
+          and gha_ansible_core_version not in {
+              'stable-2.9', 'stable-2.10', 'stable-2.11'
+          }
+          and gha_target_python_version
+          and gha_controller_python_version not in {
+              'auto', gha_target_python_version
+          }
+      ):
+          command.extend([
+              '--controller',
+              f"docker:default,python={gha_controller_python_version}",
+              '--target',
+              f"docker:{gha_docker_image or 'default'},"
+              f"python={gha_target_python_version}",
+          ])
+      else:
+          command.extend([
+              '--docker',
+              gha_docker_image or 'default',
+          ])
+          if gha_target_python_version:
+              command.extend([
+                  '--python',
+                  gha_target_python_version,
+              ])
+
+      command.extend(shlex.split(gha_target))
+
+      set_output('command', shlex.join(command))
+      set_output('has-coverage', json.dumps(has_coverage))
+      set_output('has-change-detection', json.dumps(has_change_detection))
+    shell: python
+
+  - name: Log the next step action
+    if: >-
+      !inputs.collection-src-directory
+    run: >-
+      echo ▷ Checking out the repository into a temporary location...
     shell: bash
   - name: Check out the collection
-    uses: actions/checkout@v2
+    if: >-
+      !inputs.collection-src-directory
+    uses: actions/checkout@v4
     with:
       path: .tmp-ansible-collection-checkout
       persist-credentials: false
       ref: ${{ inputs.git-checkout-ref }}
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
+      fetch-depth: >-
+        ${{
+          steps.ansible-test-command.outputs.has-change-detection == 'true'
+          && '0' || '1'
+        }}
 
-  - name: Open an expandable block of code
+  - name: Log the next step action
+    if: >-
+      !inputs.collection-src-directory
+      && steps.ansible-test-command.outputs.has-change-detection == 'true'
     run: >-
-      echo ::group::Extracting the collection metadata from "'galaxy.yml'"...
+      echo ▷ Create branches for change detection
+    shell: bash
+  - name: Create branches for change detection
+    if: >-
+      !inputs.collection-src-directory
+      && steps.ansible-test-command.outputs.has-change-detection == 'true'
+    run: |
+      # Create a branch for the current HEAD, which happens to be a merge commit
+      git checkout -b 'pull-request-${{ github.event.pull_request.number }}'
+
+      # Name the target branch
+      git branch '${{
+        github.event.pull_request.base.ref
+      }}' --track 'origin/${{
+        github.event.pull_request.base.ref
+      }}'
+
+      # Show branch information
+      git branch -vv
+    shell: bash
+    working-directory: >-
+      .tmp-ansible-collection-checkout
+
+  - name: Log the next step action
+    run: >-
+      echo ▷ Extracting the collection metadata from "'galaxy.yml'"...
     shell: bash
   - name: Extract the collection metadata
     id: collection-metadata
     run: |
+      import os
+      import pathlib
       import yaml
 
+      FILE_APPEND_MODE = 'a'
+      OUTPUTS_FILE_PATH = pathlib.Path(os.environ['GITHUB_OUTPUT'])
+
+      def set_output(name, value):
+          with OUTPUTS_FILE_PATH.open(FILE_APPEND_MODE) as outputs_file:
+              outputs_file.writelines(f'{name}={value}{os.linesep}')
+
+      directory = "${{
+        format(
+          '{0}/{1}',
+          (
+            inputs.collection-src-directory
+            && inputs.collection-src-directory
+            || '.tmp-ansible-collection-checkout'
+          ),
+          inputs.collection-root
+        )
+      }}"
+
       COLLECTION_META_FILE = 'galaxy.yml'
-      with open(COLLECTION_META_FILE) as galaxy_yml:
-          collection_meta = yaml.load(galaxy_yml)
+      with open(os.path.join(directory, COLLECTION_META_FILE)) as galaxy_yml:
+          collection_meta = yaml.safe_load(galaxy_yml)
 
       coll_name = collection_meta['name']
       coll_ns = collection_meta['namespace']
 
-      print('::set-output name=name::{name}'.format(name=coll_name))
-      print('::set-output name=namespace::{ns}'.format(ns=coll_ns))
+      set_output('name', coll_name)
+      set_output('namespace', coll_ns)
 
-      print(
-          '::set-output name=fqcn::{ns}.{name}'.
-          format(name=coll_name, ns=coll_ns)
-      )
-      print(
-          '::set-output '
-          'name=collection-namespace-path::ansible_collections/{ns}'.
-          format(ns=coll_ns)
-      )
-      print(
-          '::set-output name=checkout-path::ansible_collections/{ns}/{name}'.
-          format(name=coll_name, ns=coll_ns)
-      )
+      set_output('fqcn', f'{coll_ns}.{coll_name}')
+
+      wanted_path = f'ansible_collections{os.sep}{coll_ns}{os.sep}{coll_name}'
+      if directory.endswith(wanted_path):
+          set_output('copy-to-checkout-path', 'false')
+          set_output(
+              'collection-namespace-path',
+              os.path.normpath(os.path.join(directory, '..')))
+          set_output('checkout-path', directory)
+      else:
+          set_output('copy-to-checkout-path', 'true')
+          set_output(
+              'collection-namespace-path',
+              os.path.join('ansible_collections', coll_ns))
+          set_output(
+              'checkout-path',
+              os.path.join('ansible_collections', coll_ns, coll_name))
     shell: python
-    working-directory: .tmp-ansible-collection-checkout
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
 
-  - name: Open an expandable block of code
+  - name: Log the next step action
+    if: >-
+      ${{ fromJSON(steps.collection-metadata.outputs.copy-to-checkout-path) }}
     run: >-
-      echo ::group::Move "'${{ steps.collection-metadata.outputs.fqcn }}'"
+      echo ▷ ${{ inputs.collection-src-directory && 'Copy' || 'Move' }}
+      "'${{ steps.collection-metadata.outputs.fqcn }}'"
       collection to ${{ steps.collection-metadata.outputs.checkout-path }}...
     shell: bash
-  - name: Install ansible-core (${{ inputs.ansible-core-version }})
+  - name: Move the collection to the proper path
+    if: >-
+      ${{ fromJSON(steps.collection-metadata.outputs.copy-to-checkout-path) }}
     run: >-
       set -x
       ;
       mkdir -pv
       "${{ steps.collection-metadata.outputs.collection-namespace-path }}"
       ;
-      mv -v
-      ".tmp-ansible-collection-checkout"
+      ${{ inputs.collection-src-directory && 'cp -a' || 'mv' }}
+      -v
+      "${{
+        format(
+          '{0}/{1}',
+          (
+            inputs.collection-src-directory
+            && inputs.collection-src-directory
+            || '.tmp-ansible-collection-checkout'
+          ),
+          inputs.collection-root != '.' && inputs.collection-root || ''
+        )
+      }}"
       "${{ steps.collection-metadata.outputs.checkout-path }}"
       ;
       set +x
     shell: bash
-  - name: Close an expandable block of code
+
+  - name: Log the next step action
     run: >-
-      echo ::endgroup::
+      echo ▷ Installing ansible-core
+      version ${{ inputs.ansible-core-version }}...
+    shell: bash
+  - name: Install ansible-core (${{ inputs.ansible-core-version }})
+    run: >-
+      set -x
+      ;
+      python -m pip install
+      https://github.com/${{
+        inputs.ansible-core-github-repository-slug
+      }}/archive/${{
+        inputs.ansible-core-version
+      }}.tar.gz
+      --disable-pip-version-check
+      --user
+      ;
+      set +x
     shell: bash
 
-  - name: Open an expandable block of code
+  - name: Log the next step action
     run: >-
-      echo ::group::Installing collection
+      echo ▷ Installing collection
       dependencies: ${{ inputs.test-deps }}
     shell: bash
   - name: Install collection dependencies
     # if: inputs.test-deps
+    # yamllint disable rule:line-length
     run: >-
       ${{
           inputs.test-deps
-          && format('set -x; venv/bin/ansible-galaxy collection install {0} -p .; set +x', inputs.test-deps)
+          && format(
+              'set -x; ~/.local/bin/ansible-galaxy collection install {0} -p .; set +x',
+              inputs.test-deps
+          )
           || '>&2 echo Skipping installing the dependencies...'
       }}
-    shell: bash
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
+    # yamllint enable rule:line-length
     shell: bash
 
-  - name: Open an expandable block of code
+  - name: Log the next step action
     run: >-
-      echo ::group::Running a pre-test
+      echo ▷ Running a pre-test
       command: "'${{ inputs.pre-test-cmd }}'"
     shell: bash
   - name: Run a pre-test command
@@ -209,16 +616,13 @@ runs:
       }}
     shell: bash
     working-directory: ${{ steps.collection-metadata.outputs.checkout-path }}
-  - name: Close an expandable block of code
-    run: >-
-      echo ::endgroup::
-    shell: bash
 
-  - name: Open an expandable block of code
+  - name: Log the next step action
     run: >-
-      echo ::group::Running ${{ inputs.testing-type }} tests...
+      echo ▷ Running ${{ inputs.testing-type }} tests...
     shell: bash
   - name: Run ${{ inputs.testing-type }} tests
+    # yamllint disable rule:line-length
     # NOTE: Theoretically, it's best to have a `--` separator before the
     # NOTE: targets list but unfortunately, it causes problem with the
     # NOTE: arguments bypass when run with `--docker` so for now, it's
@@ -229,27 +633,120 @@ runs:
     run: >-
       set -x
       ;
-      ${GITHUB_WORKSPACE}/venv/bin/ansible-test ${{ inputs.testing-type }}
-      -v --color
-      --docker ${{ inputs.docker-image }}
-      --coverage
-      ${{
-          inputs.testing-type == 'integration'
-          && '--retry-on-error --continue-on-error --diff'
-          || ''
-      }}
-      ${{
-          inputs.target-python-version
-          && format('--python {0}', inputs.target-python-version)
-          || ''
-      }}
-      ${{ inputs.target }}
+      ~/.local/bin/ansible-test ${{ steps.ansible-test-command.outputs.command }}
+      ;
+      set +x
+    # yamllint enable rule:line-length
+    shell: bash
+    working-directory: ${{ steps.collection-metadata.outputs.checkout-path }}
+
+  - name: Log the next step action
+    if: steps.ansible-test-command.outputs.has-coverage == 'true'
+    run: >-
+      echo ▷ Generating a coverage report...
+    shell: bash
+  - name: Generate coverage report
+    if: steps.ansible-test-command.outputs.has-coverage == 'true'
+    run: >-
+      set -x
+      ;
+      ~/.local/bin/ansible-test coverage xml
+      -v --requirements
+      --group-by command
+      --group-by version
       ;
       set +x
     shell: bash
     working-directory: ${{ steps.collection-metadata.outputs.checkout-path }}
-  - name: Close an expandable block of code
+
+  - name: Log the next step action
+    if: steps.ansible-test-command.outputs.has-coverage == 'true'
     run: >-
-      echo ::endgroup::
+      echo ▷ Generating a coverage report only grouped by command...
     shell: bash
+  - name: Generate a coverage report only grouped by command
+    if: steps.ansible-test-flags.outputs.coverage-arg != ''
+    run: >-
+      set -x
+      ;
+      ~/.local/bin/ansible-test coverage xml
+      -v --requirements
+      --group-by command
+      ;
+      set +x
+    shell: bash
+    working-directory: ${{ steps.collection-metadata.outputs.checkout-path }}
+
+  - name: Log the next step action
+    if: steps.ansible-test-flags.outputs.coverage-arg != ''
+    run: >-
+      echo ▷ Sending the coverage data over to
+      https://codecov.io/gh/${{ github.repository }}...
+    shell: bash
+  - name: >-
+      Send the coverage data over to
+      https://codecov.io/gh/${{ github.repository }}
+    if: steps.ansible-test-command.outputs.has-coverage == 'true'
+    uses: codecov/codecov-action@v4.3.1
+    with:
+      files: >-
+        ${{
+          steps.collection-metadata.outputs.checkout-path
+        }}/tests/output/reports/coverage=${{
+          inputs.testing-type
+        }}=*.xml
+      flags: ${{ inputs.testing-type }}
+      token: ${{ inputs.codecov-token }}
+      working-directory: ${{ steps.collection-metadata.outputs.checkout-path }}
+
+  - name: Produce markdown test summary from JUnit
+    if: always()
+    uses: test-summary/action@v2
+    with:
+      # NOTE: The path is borrowed from
+      # https://github.com/ansible/ansible/blob/71adb02/.azure-pipelines/scripts/process-results.sh#L6-L10
+      # which suggests that ansible-core's location is different from
+      # the collection ones.
+      # Since we are targeting collections, it's fine for us not to
+      # have a similar conditional.
+      paths: >-
+        ${{
+          steps.collection-metadata.outputs.checkout-path
+        }}/tests/output/junit/*.xml
+
+  - name: Check if Cobertura XML coverage files exist
+    if: always()
+    id: coverage-files
+    run: >-
+      set +x
+      ;
+      ls -1 '${{
+        steps.collection-metadata.outputs.checkout-path
+      }}/tests/output/reports/coverage=${{
+        inputs.testing-type
+      }}.xml'
+      && ( echo "present=true" >> "${GITHUB_OUTPUT}" )
+      ;
+      exit 0
+    shell: bash
+  - name: Produce markdown test summary from Cobertura XML
+    if: steps.coverage-files.outputs.present == 'true'
+    uses: irongut/CodeCoverageSummary@v1.3.0
+    with:
+      badge: true
+      filename: >-
+        ${{
+          steps.collection-metadata.outputs.checkout-path
+        }}/tests/output/reports/coverage=${{
+          inputs.testing-type
+        }}.xml
+      format: markdown
+      output: both
+  # Ref: https://github.com/irongut/CodeCoverageSummary/issues/66
+  - name: Append coverage results to Job Summary
+    if: steps.coverage-files.outputs.present == 'true'
+    run: >-
+      cat code-coverage-results.md >> "${GITHUB_STEP_SUMMARY}"
+    shell: bash
+
 ...

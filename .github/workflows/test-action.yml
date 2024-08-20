@@ -1,0 +1,208 @@
+---
+name: 🧪
+
+on:   # yamllint disable-line rule:truthy
+  merge_group:
+  push:
+    branches-ignore:
+    - gh-readonly-queue/**  # Temporary merge queue-related GH-made branches
+  pull_request:
+
+jobs:
+  tests:
+    name: >-
+      Ⓐ${{ matrix.ansible-core-version }}
+      @
+      🐍${{ matrix.origin-python-version }}:
+      ${{ matrix.testing-type }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    services:
+      httpbin:
+        image: kennethreitz/httpbin
+    strategy:
+      fail-fast: false
+      matrix:
+        ansible-core-version:
+        - ''
+        collection-root:
+        - ''
+        collection-src-directory:
+        - ''
+        docker-image:
+        - default
+        git-checkout-ref:
+        - ''
+        integration-continue-on-error:
+        - ''
+        integration-diff:
+        - ''
+        integration-retry-on-error:
+        - ''
+        origin-python-version:
+        - ''
+        pre-action-cmd:
+        - ''
+        pre-test-cmd:
+        - ''
+        pull-request-change-detection:
+        - ''
+        target:
+        - ''
+        target-python-version:
+        - ''
+        test-deps:
+        - ''
+        testing-type:
+        - ''
+        coverage:
+        - auto
+        exclude:
+        - ansible-core-version: ''
+        include:
+        - ansible-core-version: stable-2.11
+          origin-python-version: '3.8'
+          testing-type: sanity
+          collection-root: .
+          collection-src-directory: ./.tmp-action-checkout
+          coverage: auto
+          integration-continue-on-error: true
+          integration-diff: true
+          integration-retry-on-error: true
+          pre-action-cmd: >-
+            mv -v
+            .internal/ansible/ansible_collections/internal/test/galaxy.yml .
+          pre-test-cmd: rm -rfv .internal/
+        - ansible-core-version: stable-2.12
+          collection-root: .internal/ansible/ansible_collections/internal/test
+          collection-src-directory: ./.tmp-action-checkout
+          coverage: never
+          integration-continue-on-error: true
+          integration-diff: true
+          integration-retry-on-error: true
+          origin-python-version: auto
+          testing-type: sanity
+        - ansible-core-version: devel
+          collection-root: .internal/ansible/ansible_collections/internal/test
+          collection-src-directory: ./.tmp-action-checkout
+          coverage: always
+          integration-continue-on-error: true
+          integration-diff: true
+          integration-retry-on-error: true
+          origin-python-version: auto
+          testing-type: units
+        - ansible-core-version: stable-2.13
+          collection-root: .internal/ansible/ansible_collections/internal/test
+          # NOTE: A missing `collection-src-directory` input causes
+          # NOTE: fetching the repo from GitHub.
+          coverage: auto
+          integration-continue-on-error: false
+          integration-diff: true
+          integration-retry-on-error: true
+          origin-python-version: '3.9'
+          pull-request-change-detection: 'true'
+          testing-type: integration
+        - ansible-core-version: stable-2.13
+          collection-root: .internal/ansible/ansible_collections/internal/test
+          # NOTE: A missing `collection-src-directory` input causes
+          # NOTE: fetching the repo from GitHub.
+          coverage: auto
+          integration-continue-on-error: true
+          integration-diff: true
+          integration-retry-on-error: false
+          origin-python-version: auto
+          testing-type: integration
+          test-deps: >-
+            --no-deps
+            git+https://github.com/ansible-collections/ansible.netcommon.git
+        - ansible-core-version: stable-2.14
+          collection-root: .internal/ansible/ansible_collections/internal/test
+          collection-src-directory: ./.tmp-action-checkout
+          coverage: auto
+          integration-continue-on-error: true
+          integration-diff: false
+          integration-retry-on-error: true
+          origin-python-version: >-
+            3.10
+          testing-type: integration
+          test-deps: >-
+            git+https://github.com/ansible-collections/ansible.utils.git
+            git+https://github.com/ansible-collections/ansible.netcommon.git
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        path: .tmp-action-checkout/
+
+    - name: Run a pre-action command
+      if: matrix.pre-action-cmd
+      run: ${{ matrix.pre-action-cmd }}
+      working-directory: ./.tmp-action-checkout/
+
+    - name: Run ${{ matrix.testing-type }} tests
+      id: tests
+      uses: ./.tmp-action-checkout/
+      with:
+        ansible-core-version: ${{ matrix.ansible-core-version }}
+        collection-root: ${{ matrix.collection-root }}
+        collection-src-directory: ${{ matrix.collection-src-directory }}
+        coverage: ${{ matrix.coverage }}
+        docker-image: ${{ matrix.docker-image }}
+        git-checkout-ref: ${{ matrix.git-checkout-ref }}
+        integration-continue-on-error: >-
+          ${{ matrix.integration-continue-on-error || 'true' }}
+        integration-diff: ${{ matrix.integration-diff || 'true' }}
+        integration-retry-on-error: >-
+          ${{ matrix.integration-retry-on-error || 'true' }}
+        origin-python-version: ${{ matrix.origin-python-version }}
+        pre-test-cmd: ${{ matrix.pre-test-cmd }}
+        pull-request-change-detection: >-
+          ${{ matrix.pull-request-change-detection || 'false' }}
+        target: ${{ matrix.target }}
+        target-python-version: ${{ matrix.target-python-version }}
+        testing-type: ${{ matrix.testing-type }}
+        test-deps: ${{ matrix.test-deps }}
+
+    - name: Log the outputs
+      run: |
+        echo "ansible-playbook-executable=${{
+          steps.tests.outputs.ansible-playbook-executable
+        }}"
+        echo "ansible-test-executable=${{
+          steps.tests.outputs.ansible-test-executable
+        }}"
+        echo "checkout-directory=${{
+          steps.tests.outputs.checkout-directory
+        }}"
+        echo "collection-fqcn=${{
+          steps.tests.outputs.collection-fqcn
+        }}"
+        echo "collection-name=${{
+          steps.tests.outputs.collection-name
+        }}"
+        echo "collection-namespace=${{
+          steps.tests.outputs.collection-namespace
+        }}"
+        echo "origin-python-path=${{
+          steps.tests.outputs.origin-python-path
+        }}"
+        echo "origin-python-version=${{
+          steps.tests.outputs.origin-python-version
+        }}"
+
+  check:  # This job does nothing and is only used for the branch protection
+    if: always()
+
+    needs:
+    - tests
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 1
+
+    steps:
+    - name: Decide whether the needed jobs succeeded or failed
+      uses: re-actors/alls-green@release/v1
+      with:
+        jobs: ${{ toJSON(needs) }}
+...
